@@ -1,0 +1,8 @@
+
+/bin/
+/CodegenDir/
+Codegen
+utilities/typescript/node_modules/
+.*
+go.work*
+!/.gitignore
