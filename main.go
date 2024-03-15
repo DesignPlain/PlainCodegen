@@ -1,12 +1,14 @@
 package main
 
 import (
+	"container/list"
 	_ "embed"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	. "github.com/dave/jennifer/jen"
@@ -17,7 +19,12 @@ import (
 var pulumiSchema []byte
 
 const CodegenDir = "/CodegenDir/"
-const TargetLanguage = "Go"
+const TargetLanguage = "TS"
+
+type UIType struct {
+	typeName string
+	desc     string
+}
 
 func main() {
 	codegenDir := CodegenDir + "go/"
@@ -65,7 +72,7 @@ func main() {
 					charArray := []rune(resourceField)
 					fieldName := strings.ToUpper(string(charArray[0])) + string(charArray[1:])
 
-					fieldStatement := g.Commentf(strings.Trim(fieldProperty.Description, "\n")).Line().Id(fieldName)
+					fieldStatement := g.Commentf(strings.Replace(strings.Trim(fieldProperty.Description, "\n"), "*", "-", -1)).Line().Id(fieldName)
 
 					// TODO: temporary hack, will write a converted for this
 					var targetStruct *schema.TypeSpec
@@ -118,7 +125,7 @@ func main() {
 					charArray := []rune(resourceField)
 					fieldName := strings.ToUpper(string(charArray[0])) + string(charArray[1:])
 
-					fieldStatement := g.Commentf(strings.Trim(fieldProperty.Description, "\n")).Line().Id(fieldName)
+					fieldStatement := g.Commentf(strings.Replace(strings.Trim(fieldProperty.Description, "\n"), "*", "-", -1)).Line().Id(fieldName)
 
 					// TODO: temporary hack, will write a converted for this
 					var targetStruct *schema.TypeSpec
@@ -151,6 +158,8 @@ func main() {
 		}
 
 	} else if TargetLanguage == "TS" {
+		resourceTypeEnum := Line()
+		resourceTypeMap := map[string]*list.List{}
 		for resourceURI, resourceData := range packageSpec.Resources {
 			importSet := map[string]struct{}{}
 
@@ -165,12 +174,44 @@ func main() {
 				}
 			}
 
-			generator := Id("export").Id("class").Id(resourceName).Id("extends").Id("Resource").BlockFunc(func(g *Group) {
+			if val, ok := resourceTypeMap[resourceFamily]; ok {
+				val.PushBack(resourceName)
+			} else {
+				resourceTypeMap[resourceFamily] = list.New()
+				resourceTypeMap[resourceFamily].PushBack(resourceName)
+			}
+
+			typeMap := map[string]UIType{}
+			generator := Line().Line().Id("export").Id("interface").Id(resourceName + "Args").BlockFunc(func(g *Group) {
+
+				for resourceField, fieldProperty := range resourceData.InputProperties {
+					charArray := []rune(resourceField)
+					fieldName := strings.ToUpper(string(charArray[0])) + string(charArray[1:])
+
+					fieldStatement := g.Commentf(strings.Replace(strings.Trim(fieldProperty.Description, "\n"), "*", "-", -1)).Line()
+					fieldStatement.Id(fieldName).Op("?:")
+
+					// TODO: temporary hack, will write a converted for this
+					var targetStruct *schema.TypeSpec
+					temporaryVariable, _ := json.Marshal(fieldProperty)
+					err = json.Unmarshal(temporaryVariable, &targetStruct)
+
+					fType := GetResourceType(targetStruct, fieldStatement, importSet)
+
+					fieldStatement.Op(";").Line()
+					typeMap[fieldName] = UIType{
+						typeName: fType,
+						desc:     strings.Trim(fieldProperty.Description, "\n")}
+				}
+
+			})
+
+			generator.Id("export").Id("class").Id(resourceName).Id("extends").Id("Resource").BlockFunc(func(g *Group) {
 				for resourceField, fieldProperty := range resourceData.Properties {
 					charArray := []rune(resourceField)
 					fieldName := strings.ToUpper(string(charArray[0])) + string(charArray[1:])
 
-					fieldStatement := g.Commentf(strings.Trim(fieldProperty.Description, "\n")).Line()
+					fieldStatement := g.Commentf(strings.Replace(strings.Trim(fieldProperty.Description, "\n"), "*", "-", -1)).Line()
 					fieldStatement.Id("public").Id(fieldName).Op("?:")
 
 					// TODO: temporary hack, will write a converted for this
@@ -181,42 +222,67 @@ func main() {
 					GetResourceType(targetStruct, fieldStatement, importSet)
 
 					fieldStatement.Op(";").Line()
-
 				}
-			})
+				g.Id("public").Id("static").Id("GetTypes()").Op(":").Id("DynamicUIProps[]").Id("{").Line().Id("return [")
 
-			generator.Line().Line().Id("export").Id("interface").Id(resourceName + "Args").BlockFunc(func(g *Group) {
-				for resourceField, fieldProperty := range resourceData.InputProperties {
-					charArray := []rune(resourceField)
-					fieldName := strings.ToUpper(string(charArray[0])) + string(charArray[1:])
-
-					fieldStatement := g.Commentf(strings.Trim(fieldProperty.Description, "\n")).Line()
-					fieldStatement.Id(fieldName).Op("?:")
-
-					// TODO: temporary hack, will write a converted for this
-					var targetStruct *schema.TypeSpec
-					temporaryVariable, _ := json.Marshal(fieldProperty)
-					err = json.Unmarshal(temporaryVariable, &targetStruct)
-
-					GetResourceType(targetStruct, fieldStatement, importSet)
-
-					fieldStatement.Op(";").Line()
-
+				for k, v := range typeMap {
+					g.Id("new DynamicUIProps(" + v.typeName + ",'" + k + "'," + strconv.Quote(v.desc) + "),")
 				}
+				g.Line().Id("];}")
 			})
 
 			importData := Line()
+
+			importData.Id("import { InputType } from 'src/app/enum/InputType';").Line()
+			importData.Id("import { Resource } from 'src/app/Models/CloudResource';").Line()
+			importData.Id("import { DynamicUIProps } from 'src/app/components/resource-config/resource-config.component';").Line()
 			for importName, _ := range importSet {
-				importData.Id("import").Op("{").Id(importName).Op("}").Id("from").Id("'../types/" + importName + "'").Op(";").Line()
+				importData.Id("import {").Id(importName).Op("} from").Id("'../types/" + importName + "';").Line()
 			}
 
-			_, fileContent, _ := strings.Cut(fmt.Sprintf("%#v", importData.Line().Add(generator)), "\n")
-			fileContent = strings.Trim(fileContent, ")")
+			fileContent := CleanTSCode(fmt.Sprintf("%#v", importData.Line().Add(generator)))
 
 			fmt.Println("Writting to ", providerDir+resourceFamily+"/"+resourceName+".ts")
 			if err = os.WriteFile(providerDir+resourceFamily+"/"+resourceName+".ts", []byte(fileContent), 0644); err != nil {
 				panic(err)
 			}
+		}
+
+		importData := Line()
+		importData.Id("import { ResourceType } from './ResourceType.ts';").Line()
+		importData.Id("import { Resource } from 'src/app/Models/CloudResource';").Line()
+		importData.Id("import { DynamicUIProps } from 'src/app/components/resource-config/resource-config.component';").Line()
+
+		ResourceFactoryMap := Id("export class ResourceProperties {").Line().Id(" static readonly ResourceFactoryMap = new Map<ResourceType, () => Resource>([").Line()
+		PropertiesMap := Line()
+		for k, v := range resourceTypeMap {
+			for i := v.Front(); i != nil; i = i.Next() {
+				resourceEnum := strings.ToUpper(k) + "_" + strings.ToUpper(i.Value.(string))
+				resourceTypeEnum.Id(resourceEnum).Op(",").Line()
+				ResourceFactoryMap.Id("[ResourceType." + resourceEnum + ", () => new " + strings.ToUpper(k) + "_" + i.Value.(string) + "()],").Line()
+				PropertiesMap.Id("[ResourceType." + resourceEnum + "," + strings.ToUpper(k) + "_" + i.Value.(string) + ".GetTypes()],").Line()
+				//fmt.Println(k, i.Value.(string))
+				importData.Id("import { " + i.Value.(string) + " as " + strings.ToUpper(k) + "_" + i.Value.(string) + " } from './" + k + "/" + i.Value.(string) + "';").Line()
+			}
+
+		}
+
+		ResourceFactoryMap.Id("]);").Line()
+
+		ResourceFactoryMap.Id("public static GetResourceObject(resType: ResourceType): Resource {	return (this.ResourceFactoryMap.get(resType) as () => Resource)();  }").Line()
+
+		ResourceFactoryMap.Id(" public static propertiesMap: Map<ResourceType, DynamicUIProps[]> = new Map([").Line()
+		ResourceFactoryMap.Add(PropertiesMap).Line().Id("]);}")
+
+		resourceFactoryMapContent := CleanTSCode(fmt.Sprintf("%#v", importData.Line().Add(ResourceFactoryMap)))
+		resourceTypeEnumContent := CleanTSCode(fmt.Sprintf("%#v", Id("export").Id("enum").Id("ResourceType").Block(resourceTypeEnum)))
+
+		if err = os.WriteFile(providerDir+"/ResourceProperties.ts", []byte(resourceFactoryMapContent), 0644); err != nil {
+			panic(err)
+		}
+
+		if err = os.WriteFile(providerDir+"/ResourceType.ts", []byte(resourceTypeEnumContent), 0644); err != nil {
+			panic(err)
 		}
 
 		for resourceURI, resourceData := range packageSpec.Types {
@@ -238,7 +304,7 @@ func main() {
 					charArray := []rune(resourceField)
 					fieldName := strings.ToUpper(string(charArray[0])) + string(charArray[1:])
 
-					fieldStatement := g.Commentf(strings.Trim(fieldProperty.Description, "\n")).Line()
+					fieldStatement := g.Commentf(strings.Replace(strings.Trim(fieldProperty.Description, "\n"), "*", "-", -1)).Line()
 					fieldStatement.Id(fieldName).Op("?:")
 
 					// TODO: temporary hack, will write a converted for this
@@ -255,7 +321,7 @@ func main() {
 
 			importData := Line()
 			for importName, _ := range importSet {
-				importData.Id("import").Op("{").Id(importName).Op("}").Id("from").Id("'./" + importName + "'").Op(";").Line()
+				importData.Id("import {").Id(importName).Op("} from").Id("'./" + importName + "';").Line()
 			}
 
 			_, fileContent, _ := strings.Cut(fmt.Sprintf("%#v", importData.Line().Add(generator)), "\n")
@@ -271,6 +337,11 @@ func main() {
 	}
 }
 
+func CleanTSCode(codeString string) string {
+	_, fileContent, _ := strings.Cut(codeString, "\n")
+	fileContent = strings.Trim(fileContent, ")")
+	return fileContent
+}
 func FormatCode() {
 	var rootDir, err = os.Getwd()
 	if err != nil {
@@ -302,7 +373,8 @@ func FormatCode() {
 	}
 }
 
-func GetResourceType(typeSpec *schema.TypeSpec, statement *Statement, importSet map[string]struct{}) {
+func GetResourceType(typeSpec *schema.TypeSpec, statement *Statement, importSet map[string]struct{}) string {
+	fType := "InputType.String"
 	switch typeSpec.Type {
 	case "boolean":
 		if TargetLanguage == "Go" {
@@ -310,6 +382,7 @@ func GetResourceType(typeSpec *schema.TypeSpec, statement *Statement, importSet 
 		} else if TargetLanguage == "TS" {
 			statement.Id("boolean")
 		}
+		fType = "InputType.CheckBox"
 		break
 
 	case "integer":
@@ -318,6 +391,8 @@ func GetResourceType(typeSpec *schema.TypeSpec, statement *Statement, importSet 
 		} else if TargetLanguage == "TS" {
 			statement.Id("number")
 		}
+
+		fType = "InputType.Number"
 		break
 
 	case "number":
@@ -326,6 +401,8 @@ func GetResourceType(typeSpec *schema.TypeSpec, statement *Statement, importSet 
 		} else if TargetLanguage == "TS" {
 			statement.Id("number")
 		}
+
+		fType = "InputType.Number"
 		break
 
 	case "string":
@@ -341,6 +418,8 @@ func GetResourceType(typeSpec *schema.TypeSpec, statement *Statement, importSet 
 			GetResourceType(typeSpec.Items, arrayStatement, importSet)
 			arrayStatement.Op(">")
 		}
+
+		fType = "InputType.DropDown"
 		break
 
 	case "object":
@@ -366,4 +445,6 @@ func GetResourceType(typeSpec *schema.TypeSpec, statement *Statement, importSet 
 
 		statement.Id(typeName)
 	}
+
+	return fType
 }
