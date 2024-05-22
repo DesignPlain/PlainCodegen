@@ -1,13 +1,14 @@
 package main
 
 import (
-	"container/list"
+	"cmp"
 	_ "embed"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -15,7 +16,7 @@ import (
 	"github.com/pulumi/pulumi/pkg/v3/codegen/schema"
 )
 
-//go:embed resourceSchema/schema_gcp.json
+//go:embed resourceSchema/schema_aws.json
 var pulumiSchema []byte
 
 const CodegenDir = "/CodegenDir/"
@@ -167,7 +168,7 @@ func main() {
 
 	} else if TargetLanguage == "TS" {
 		resourceTypeEnum := Line()
-		resourceTypeMap := map[string]*list.List{}
+		resourceTypeMap := map[string][]string{}
 		for resourceURI, resourceData := range packageSpec.Resources {
 			importSet := map[string]struct{}{}
 
@@ -183,10 +184,14 @@ func main() {
 			}
 
 			if val, ok := resourceTypeMap[resourceFamily]; ok {
-				val.PushBack(resourceName)
+				val = append(val, resourceName)
+				slices.SortFunc(val, func(a, b string) int {
+					return cmp.Compare(strings.ToLower(a), strings.ToLower(b))
+				})
+
+				resourceTypeMap[resourceFamily] = val
 			} else {
-				resourceTypeMap[resourceFamily] = list.New()
-				resourceTypeMap[resourceFamily].PushBack(resourceName)
+				resourceTypeMap[resourceFamily] = []string{resourceName}
 			}
 
 			typeMap := map[string]UIType{}
@@ -303,14 +308,25 @@ func main() {
 
 		ResourceFactoryMap := Id("export class ResourceProperties {").Line().Id(" static readonly ResourceFactoryMap = new Map<ResourceType, () => Resource>([").Line()
 		PropertiesMap := Line()
-		for k, v := range resourceTypeMap {
-			for i := v.Front(); i != nil; i = i.Next() {
-				resourceEnum := strings.ToUpper(k) + "_" + strings.ToUpper(i.Value.(string))
+
+		keys := make([]string, 0, len(resourceTypeMap))
+		for k := range resourceTypeMap {
+			keys = append(keys, k)
+		}
+
+		slices.SortFunc(keys, func(a, b string) int {
+			return cmp.Compare(strings.ToLower(a), strings.ToLower(b))
+		})
+
+		for _, res_family := range keys {
+			for _, resourceName := range resourceTypeMap[res_family] {
+				//fmt.Println(resourceName)
+				res_family_upper := strings.ToUpper(res_family)
+				resourceEnum := res_family_upper + "_" + strings.ToUpper(resourceName)
 				resourceTypeEnum.Id(resourceEnum).Op(",").Line()
-				ResourceFactoryMap.Id("[ResourceType." + resourceEnum + ", () => new " + strings.ToUpper(k) + "_" + i.Value.(string) + "()],").Line()
-				PropertiesMap.Id("[ResourceType." + resourceEnum + "," + strings.ToUpper(k) + "_" + i.Value.(string) + ".GetTypes()],").Line()
-				//fmt.Println(k, i.Value.(string))
-				importData.Id("import { " + i.Value.(string) + " as " + strings.ToUpper(k) + "_" + i.Value.(string) + " } from './" + k + "/" + i.Value.(string) + "';").Line()
+				ResourceFactoryMap.Id("[ResourceType." + resourceEnum + ", () => new " + res_family_upper + "_" + resourceName + "()],").Line()
+				PropertiesMap.Id("[ResourceType." + resourceEnum + "," + res_family_upper + "_" + resourceName + ".GetTypes()],").Line()
+				importData.Id("import { " + resourceName + " as " + res_family_upper + "_" + resourceName + " } from './" + res_family + "/" + resourceName + "';").Line()
 			}
 
 		}
