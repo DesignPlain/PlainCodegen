@@ -20,7 +20,7 @@ import (
 var pulumiSchema []byte
 
 const CodegenDir = "/CodegenDir/"
-const TargetLanguage = "TS"
+const TargetLanguage = "Go"
 
 type UIType struct {
 	typeName             string
@@ -99,7 +99,7 @@ func main() {
 			importData := Line()
 			if len(importSet) > 0 {
 				// importData = Id("import").Params(imp).Line()
-				importData.Id("import types \"Codegen/CodegenDir/go/gcp/types\"")
+				importData.Id("import types \"Codegen/CodegenDir/go/" + providerName + "/types\"")
 			}
 
 			fileContent := fmt.Sprintf("%#v", Id("package").Id(resourceFamily).Line().Add(importData).Add(generator))
