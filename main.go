@@ -16,7 +16,9 @@ import (
 	"github.com/pulumi/pulumi/pkg/v3/codegen/schema"
 )
 
-//go:embed resourceSchema/schema_aws.json
+// Change the file name to target different schema
+//
+//go:embed resourceSchema/schema_gcp.json
 var pulumiSchema []byte
 
 const CodegenDir = "/CodegenDir/"
@@ -56,6 +58,12 @@ func main() {
 	}
 
 	if TargetLanguage == "Go" {
+		stringFunc := Line()
+		stringFunc.Id("func (rType ResourceType) String() string { \nswitch rType {\n")
+
+		typeMap := Line()
+		typeMap.Id("var ResourceTypeMap = map[ResourceType]func() Any{\n")
+
 		for resourceURI, resourceData := range packageSpec.Resources {
 			importSet := map[string]struct{}{}
 
@@ -69,6 +77,17 @@ func main() {
 					panic(err)
 				}
 			}
+
+			charArray := []rune(resourceFamily)
+			fieldName := strings.ToUpper(string(charArray[0])) + string(charArray[1:])
+			resourceTypeName := fieldName
+
+			charArray = []rune(resourceName)
+			fieldNameResName := strings.ToUpper(string(charArray[0])) + string(charArray[1:])
+			resourceTypeName += "_" + fieldNameResName
+
+			stringFunc.Id("case " + strings.ToUpper(resourceTypeName) + ":\n return " + "\"" + resourceTypeName + "\"\n")
+			typeMap.Id(strings.ToUpper(resourceTypeName) + ": func() Any {\n return &" + resourceFamily + "." + fieldNameResName + "{}\n},\n")
 
 			generator := NewFile(resourceFamily)
 			generator.Type().Id(resourceName).StructFunc(func(g *Group) {
@@ -91,10 +110,10 @@ func main() {
 				}
 			})
 
-			imp := Line()
-			for importName := range importSet {
-				imp.Add(Id(importName).Id("\"../types/" + importName + "\"").Line())
-			}
+			// imp := Line()
+			// for importName := range importSet {
+			// 	imp.Add(Id(importName).Id("\"../types/" + importName + "\"").Line())
+			// }
 
 			importData := Line()
 			if len(importSet) > 0 {
@@ -160,10 +179,20 @@ func main() {
 			}
 
 			fileContent := fmt.Sprintf("%#v", Id("package").Id("types").Line().Add(importData).Add(generator))
-			fmt.Println("Writting to ", providerResourceSubTypeDir+resourceName+".go")
+			//fmt.Println("Writting to ", providerResourceSubTypeDir+resourceName+".go")
 			if err = os.WriteFile(providerResourceSubTypeDir+resourceName+".go", []byte(fileContent), 0644); err != nil {
 				panic(err)
 			}
+		}
+
+		stringFunc.Id("\n }\n return \"Unknown ResourceType\"\n}\n")
+		typeMap.Id("}")
+
+		fileContent := fmt.Sprintf("%#v", Line().Add(stringFunc).Line().Add(typeMap))
+
+		fmt.Println("Writting to ", providerDir+"resource_type_helper.go")
+		if err = os.WriteFile(providerDir+"resource_type_helper.go", []byte(fileContent), 0644); err != nil {
+			panic(err)
 		}
 
 	} else if TargetLanguage == "TS" {
