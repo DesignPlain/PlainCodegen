@@ -37,6 +37,8 @@ jobs:
           
       - name: Update our schema file
         if: env.MergeChanges == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cp $PATH_SOURCE_CHECKOUT/$TARGET_FILE $PATH_OUR_REPO_CHECKOUT/resourceSchema/schema_aws.json
           cd $PATH_OUR_REPO_CHECKOUT
