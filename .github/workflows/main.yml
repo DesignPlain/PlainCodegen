@@ -5,8 +5,11 @@ env:
   PATH_SOURCE_CHECKOUT: upstream_pulumi_aws_repo
   PATH_OUR_REPO_CHECKOUT: our_codegen_repo
   TARGET_FILE: "provider/cmd/pulumi-resource-aws/schema.json"
+
 on: 
   workflow_dispatch:
+
+permissions: write-all
 
 jobs:
   pull-file:
