@@ -1,0 +1,25 @@
+name: Pull Files from Another Repository on Push
+env:
+  SOURCE_REPO: pulumi/pulumi-aws
+  USERNAME: ${{ github.actor }}
+  PATH_SOURCE_CHECKOUT: temp_folder
+
+on: 
+  workflow_dispatch:
+
+jobs:
+  pull-file:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout pulumi/pulumi-aws
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPO }}
+          path: ${{ env.PATH_SOURCE_CHECKOUT }}
+
+      - name: Update
+        run: |
+          cd $PATH_SOURCE_CHECKOUT
+          if [[ $(git log --since='1000 day ago' resourceSchema/schema_aws.json | wc -w) -gt 0 ]];then echo 'We have changes';else echo 'no change';fi
+          
+     
