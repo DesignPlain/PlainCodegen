@@ -39,10 +39,10 @@ jobs:
         if: env.MergeChanges == 'true'
         run: |
           cd $PATH_OUR_REPO_CHECKOUT
-          cp $PATH_SOURCE_CHECKOUT/env.TARGET_FILE resourceSchema/schema_aws.json
+          cp $PATH_SOURCE_CHECKOUT/$env.TARGET_FILE resourceSchema/schema_aws.json
           if ! git diff --exit-code; then
             echo "We do have changes between the copies, we are committing the changes"
-            git commit -am "Updated AWS schema file)"
+            git commit -am "Updated AWS schema file"
             git push -f origin main
           else
             echo "We have no changes between the copies, exiting"
