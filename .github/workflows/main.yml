@@ -40,7 +40,7 @@ jobs:
         run: |
           cp $PATH_SOURCE_CHECKOUT/$TARGET_FILE $PATH_OUR_REPO_CHECKOUT/resourceSchema/schema_aws.json
           cd $PATH_OUR_REPO_CHECKOUT
-          if ! git diff --exit-code; then
+          if [[ $(git diff --name-only|wc -l) -gt 0 ]]; then
             echo "We do have changes between the copies, we are committing the changes"
             git commit -am "Updated AWS schema file"
             git push -f origin main
