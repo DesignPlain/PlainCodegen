@@ -1,4 +1,4 @@
-name: Pull Files from Another Repository on Push
+name: Update Resource Schema
 env:
   SOURCE_REPO: pulumi/pulumi-aws
   USERNAME: ${{ github.actor }}
@@ -7,6 +7,8 @@ env:
   TARGET_FILE: "provider/cmd/pulumi-resource-aws/schema.json"
 
 on: 
+  schedule:
+    - cron:  '0 0 * * *'
   workflow_dispatch:
 
 permissions: write-all
@@ -24,7 +26,7 @@ jobs:
       - name: Check if the AWS schema file was changed
         run: |
           cd $PATH_SOURCE_CHECKOUT
-          if [[ $(git log --since='1000 day ago' ${{ env.TARGET_FILE }} | wc -w) -gt 0 ]]; then
+          if [[ $(git log --since='1 day ago' ${{ env.TARGET_FILE }} | wc -w) -gt 0 ]]; then
             echo 'We have changes' 
             echo "MergeChanges=true" >> $GITHUB_ENV
           else
@@ -36,10 +38,9 @@ jobs:
         if: env.MergeChanges == 'true'
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
           path: ${{ env.PATH_OUR_REPO_CHECKOUT }}
           
-      - name: Update our schema file
+      - name: Update AWS schema file
         if: env.MergeChanges == 'true'
         run: |
           cp $PATH_SOURCE_CHECKOUT/$TARGET_FILE $PATH_OUR_REPO_CHECKOUT/resourceSchema/schema_aws.json
