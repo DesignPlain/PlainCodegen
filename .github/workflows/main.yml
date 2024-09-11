@@ -2,7 +2,8 @@ name: Pull Files from Another Repository on Push
 env:
   SOURCE_REPO: pulumi/pulumi-aws
   USERNAME: ${{ github.actor }}
-  PATH_SOURCE_CHECKOUT: temp_folder
+  PATH_SOURCE_CHECKOUT: upstream_pulumi_aws_repo
+  PATH_OUR_REPO_CHECKOUT: our_codegen_repo
   TARGET_FILE: "provider/cmd/pulumi-resource-aws/schema.json"
 on: 
   workflow_dispatch:
@@ -11,15 +12,41 @@ jobs:
   pull-file:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout pulumi/pulumi-aws
+      - name: Checkout pulumi/pulumi-aws repo
         uses: actions/checkout@v4
         with:
           repository: ${{ env.SOURCE_REPO }}
           path: ${{ env.PATH_SOURCE_CHECKOUT }}
 
-      - name: Update
+      - name: Check if the AWS schema file was changed
         run: |
           cd $PATH_SOURCE_CHECKOUT
-          if [[ $(git log --since='1000 day ago' ${{ env.TARGET_FILE }} | wc -w) -gt 0 ]];then echo 'We have changes';else echo 'no change';fi
+          if [[ $(git log --since='1000 day ago' ${{ env.TARGET_FILE }} | wc -w) -gt 0 ]]; then
+            echo 'We have changes' 
+            echo "MergeChanges=true" >> $GITHUB_ENV
+          else
+            echo 'We have no changes'
+          fi
+          cd ..
+
+      - name: Checkout Our Codegen repo 
+        if: env.MergeChanges == 'true'
+        uses: actions/checkout@v4
+        with:
+          path: ${{ env.PATH_OUR_REPO_CHECKOUTT }}
+          
+      - name: Update our schema file
+        if: env.MergeChanges == 'true'
+        run: |
+          cd $PATH_OUR_REPO_CHECKOUT
+          cp $PATH_SOURCE_CHECKOUT/env.TARGET_FILE resourceSchema/schema_aws.json
+          if ! git diff --exit-code; then
+            git commit -am "Updated AWS schema file)"
+            git push -f origin main
+          fi
+          
+
+          
           
      
+ 
