@@ -18,11 +18,11 @@ import (
 
 // Change the file name to target different schema
 //
-//go:embed resourceSchema/schema_gcp.json
+//go:embed resourceSchema/schema_azure.json
 var pulumiSchema []byte
 
 const CodegenDir = "/CodegenDir/"
-const TargetLanguage = "Go"
+const TargetLanguage = "TS"
 
 type UIType struct {
 	typeName             string
@@ -519,6 +519,17 @@ func FormatCode() {
 
 func GetResourceType(typeSpec *schema.TypeSpec, statement *Statement, importSet map[string]struct{}) string {
 	fType := "InputType.String"
+	//by, _ := json.Marshal(typeSpec)
+	//fmt.Println("[Debug]: Resource Type -> %#v", string(by))
+
+	if len(typeSpec.OneOf) > 0 {
+		typeSpec = &typeSpec.OneOf[0]
+	}
+
+	if typeSpec.Type == "object" && typeSpec.Ref != "" {
+		typeSpec.Type = "ref"
+	}
+
 	switch typeSpec.Type {
 	case "boolean":
 		if TargetLanguage == "Go" {
@@ -576,6 +587,7 @@ func GetResourceType(typeSpec *schema.TypeSpec, statement *Statement, importSet 
 		fType = "InputType.Map"
 
 	default:
+		//fmt.Println("[Debug]: Resource Type -> ", typeSpec.Ref)
 		var typeName string
 		// TODO analyse and add the custom pulumi types like Archive, Asset and json and any
 		if !strings.Contains(typeSpec.Ref, "pulumi.json") {
