@@ -33,12 +33,11 @@ jobs:
         if: env.MergeChanges == 'true'
         uses: actions/checkout@v4
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           path: ${{ env.PATH_OUR_REPO_CHECKOUT }}
           
       - name: Update our schema file
         if: env.MergeChanges == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cp $PATH_SOURCE_CHECKOUT/$TARGET_FILE $PATH_OUR_REPO_CHECKOUT/resourceSchema/schema_aws.json
           cd $PATH_OUR_REPO_CHECKOUT
