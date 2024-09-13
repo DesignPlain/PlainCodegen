@@ -16,13 +16,12 @@ import (
 	"github.com/pulumi/pulumi/pkg/v3/codegen/schema"
 )
 
-// Change the file name to target different schema
-//
-//go:embed resourceSchema/schema_azure.json
-var pulumiSchema []byte
-
 const CodegenDir = "/CodegenDir/"
-const TargetLanguage = "TS"
+
+var ProviderFamily string = ""
+var TargetLanguage string = ""
+var SchemaFile string = ""
+var SchemaType = ""
 
 type UIType struct {
 	typeName             string
@@ -33,13 +32,36 @@ type UIType struct {
 }
 
 func main() {
+
+	if len(os.Args) != 3 {
+		fmt.Println("Provide valid args - Codegen [TS|Go] schema_file_name")
+		return
+	}
+
+	TargetLanguage = os.Args[1]
+	SchemaFile := os.Args[2]
+
+	if TargetLanguage != "TS" && TargetLanguage != "Go" {
+		fmt.Println("Provide valid language [TS|Go]")
+		return
+	}
+
+	if strings.Contains(SchemaFile, "aws") {
+		ProviderFamily = "AWS"
+	}
+
 	codegenDir := CodegenDir + "go/"
 	if TargetLanguage == "TS" {
 		codegenDir = CodegenDir + "ts/"
 	}
 
+	pulumiSchema, err := os.ReadFile(SchemaFile)
+	if err != nil {
+		panic(err)
+	}
+
 	var packageSpec schema.PackageSpec
-	err := json.Unmarshal(pulumiSchema, &packageSpec)
+	err = json.Unmarshal(pulumiSchema, &packageSpec)
 	if err != nil {
 		log.Fatalf("cannot deserialize schema: %v", err)
 	}
@@ -58,8 +80,11 @@ func main() {
 	}
 
 	if TargetLanguage == "Go" {
+		resourceTypeEnum := Line()
+		resourceTypeMap := map[string][]string{}
+
 		stringFunc := Line()
-		stringFunc.Id("func (rType ResourceType) String() string { \nswitch rType {\n")
+		stringFunc.Id("func Get_" + strings.ToUpper(providerName) + "_String(rType ResourceType) string { \nswitch rType {\n")
 
 		typeMap := Line()
 		typeMap.Id("var ResourceTypeMap = map[ResourceType]func() Any{\n")
@@ -76,6 +101,17 @@ func main() {
 				if err := os.Mkdir(providerDir+resourceFamily, os.ModePerm); err != nil {
 					panic(err)
 				}
+			}
+
+			if val, ok := resourceTypeMap[resourceFamily]; ok {
+				val = append(val, resourceName)
+				slices.SortFunc(val, func(a, b string) int {
+					return cmp.Compare(strings.ToLower(a), strings.ToLower(b))
+				})
+
+				resourceTypeMap[resourceFamily] = val
+			} else {
+				resourceTypeMap[resourceFamily] = []string{resourceName}
 			}
 
 			charArray := []rune(resourceFamily)
@@ -118,7 +154,7 @@ func main() {
 			importData := Line()
 			if len(importSet) > 0 {
 				// importData = Id("import").Params(imp).Line()
-				importData.Id("import types \"Codegen/CodegenDir/go/" + providerName + "/types\"")
+				importData.Id("import types \"libds/" + providerName + "/types\"")
 			}
 
 			fileContent := fmt.Sprintf("%#v", Id("package").Id(resourceFamily).Line().Add(importData).Add(generator))
@@ -129,6 +165,36 @@ func main() {
 			}
 		}
 
+		keys := make([]string, 0, len(resourceTypeMap))
+		for k := range resourceTypeMap {
+			keys = append(keys, k)
+		}
+
+		// Sort ResourceName
+		slices.SortFunc(keys, func(a, b string) int {
+			return cmp.Compare(strings.ToLower(a), strings.ToLower(b))
+		})
+
+		res_import := Line()
+
+		count := 0
+		for _, res_family := range keys {
+			res_import.Id("\"libds/" + providerName + "/" + res_family + "\"").Line()
+			for _, resourceName := range resourceTypeMap[res_family] {
+				count += 1
+				res_family_upper := strings.ToUpper(res_family)
+				resourceEnum := res_family_upper + "_" + strings.ToUpper(resourceName)
+				resourceTypeEnum.Id(resourceEnum)
+				if count == 1 && strings.Contains(providerName, "aws") {
+					resourceTypeEnum.Id(" ResourceType = RESOURCE_TYPE_LIMIT*1 + iota")
+				} else if count == 1 && strings.Contains(providerName, "gcp") {
+					resourceTypeEnum.Id(" ResourceType = RESOURCE_TYPE_LIMIT*0 + iota")
+				}
+				resourceTypeEnum.Line()
+			}
+		}
+
+		SchemaType = "Types"
 		for resourceURI, resourceData := range packageSpec.Types {
 			importSet := map[string]struct{}{}
 
@@ -172,13 +238,7 @@ func main() {
 				imp.Add(Id(importName).Id("\"./" + importName + "\"").Line())
 			}
 
-			importData := Line()
-			if len(importSet) > 0 {
-				//importData = Id("import").Params(imp).Line()
-				//importData.Id("import types \"Codegen/CodegenDir/go/gcp/types\"")
-			}
-
-			fileContent := fmt.Sprintf("%#v", Id("package").Id("types").Line().Add(importData).Add(generator))
+			fileContent := fmt.Sprintf("%#v", Id("package").Id("types").Line().Add(generator))
 			//fmt.Println("Writting to ", providerResourceSubTypeDir+resourceName+".go")
 			if err = os.WriteFile(providerResourceSubTypeDir+resourceName+".go", []byte(fileContent), 0644); err != nil {
 				panic(err)
@@ -186,23 +246,34 @@ func main() {
 		}
 
 		stringFunc.Id("\n }\n return \"Unknown ResourceType\"\n}\n")
+
 		typeMap.Id("}")
 
-		fileContent := fmt.Sprintf("%#v", Line().Add(stringFunc).Line().Add(typeMap))
+		res_import.Id(`. "libds/ds_base"`)
 
-		fmt.Println("Writting to ", providerDir+"resource_type_helper.go")
-		if err = os.WriteFile(providerDir+"resource_type_helper.go", []byte(fileContent), 0644); err != nil {
+		fileContent := fmt.Sprintf("%#v", Id("package").Id(providerName).Line().Id("import (").Add(res_import).Id(")").Line().Id("const (").Add(resourceTypeEnum).Id(")").Line().Add(stringFunc).Line().Add(typeMap))
+
+		fmt.Println("Writting to ", providerDir+"resource_type.go")
+		if err = os.WriteFile(providerDir+"resource_type.go", []byte(fileContent), 0644); err != nil {
 			panic(err)
 		}
 
 	} else if TargetLanguage == "TS" {
+		type ResDetails struct {
+			res_name string
+			desc     string
+		}
+
 		resourceTypeEnum := Line()
-		resourceTypeMap := map[string][]string{}
+		resourceTypeMap := map[string][]ResDetails{}
 		for resourceURI, resourceData := range packageSpec.Resources {
 			importSet := map[string]struct{}{}
 
 			resourceParts := strings.Split(resourceURI, ":")
 			resourceName := resourceParts[2]
+			if resourceName == "Map" {
+				resourceName = "MapResource"
+			}
 			resourceFamily := strings.Split(resourceParts[1], "/")[0]
 
 			_, err = os.Stat(providerDir + resourceFamily)
@@ -212,15 +283,31 @@ func main() {
 				}
 			}
 
+			before, _, present := strings.Cut(resourceData.Description, "## Example Usage")
+			if !present {
+				before, _, _ = strings.Cut(resourceData.Description, "\n")
+			} else {
+				before = strings.Replace(before, "\n", " ", -1)
+				before = strings.Replace(before, "\"", "\\\"", -1)
+			}
+
+			res_desc := strings.Replace(before, "*", "-", -1)
+			res_desc = strings.TrimRight(res_desc, "\n ")
+
+			res_detail := ResDetails{
+				res_name: resourceName,
+				desc:     res_desc,
+			}
+
 			if val, ok := resourceTypeMap[resourceFamily]; ok {
-				val = append(val, resourceName)
-				slices.SortFunc(val, func(a, b string) int {
-					return cmp.Compare(strings.ToLower(a), strings.ToLower(b))
+				val = append(val, res_detail)
+				slices.SortFunc(val, func(a, b ResDetails) int {
+					return cmp.Compare(strings.ToLower(a.res_name), strings.ToLower(b.res_name))
 				})
 
 				resourceTypeMap[resourceFamily] = val
 			} else {
-				resourceTypeMap[resourceFamily] = []string{resourceName}
+				resourceTypeMap[resourceFamily] = []ResDetails{res_detail}
 			}
 
 			typeMap := map[string]UIType{}
@@ -286,7 +373,7 @@ func main() {
 			//fmt.Printf("Required Inp: %#v\n", typeMap)
 
 			importData := Line()
-			generator.Id("export").Id("class").Id(resourceName).Id("extends").Id("Resource").BlockFunc(func(g *Group) {
+			generator.Id("export").Id("class").Id(resourceName).Id("extends").Id("DS_Resource").BlockFunc(func(g *Group) {
 				for resourceField, fieldProperty := range resourceData.Properties {
 					fieldName := resourceField
 
@@ -302,22 +389,23 @@ func main() {
 
 					fieldStatement.Op(";").Line()
 				}
+
 				g.Id("public").Id("static").Id("GetTypes()").Op(":").Id("DynamicUIProps[]").Id("{").Line().Id("return [")
 
 				for k, v := range typeMap {
 					if v.typeName == "InputType.Object" || v.typeName == "InputType.Array" || v.typeName == "InputType.Map" {
-						g.Id("new DynamicUIProps(" + v.typeName + ",'" + k + "'," + strconv.Quote(v.desc) + "," + v.subType + "," + strconv.FormatBool(v.isRequired) + "," + strconv.FormatBool(v.willReplaceOnChanges) + "),")
+						g.Id("new DynamicUIProps(" + v.typeName + ",'" + k + "'," + strconv.Quote(v.desc) + "," + "() => " + v.subType + "," + strconv.FormatBool(v.isRequired) + "," + strconv.FormatBool(v.willReplaceOnChanges) + "),")
 					} else {
-						g.Id("new DynamicUIProps(" + v.typeName + ",'" + k + "'," + strconv.Quote(v.desc) + "," + "[]" + "," + strconv.FormatBool(v.isRequired) + "," + strconv.FormatBool(v.willReplaceOnChanges) + "),")
+						g.Id("new DynamicUIProps(" + v.typeName + ",'" + k + "'," + strconv.Quote(v.desc) + "," + "() => []" + "," + strconv.FormatBool(v.isRequired) + "," + strconv.FormatBool(v.willReplaceOnChanges) + "),")
 					}
 				}
 
 				g.Line().Id("];}")
 			})
 
-			importData.Id("import { InputType, InputType_String_GetTypes, InputType_Number_GetTypes, InputType_Map_GetTypes } from 'src/app/enum/InputType';").Line()
-			importData.Id("import { Resource } from 'src/app/Models/CloudResource';").Line()
-			importData.Id("import { DynamicUIProps } from 'src/app/components/resource-config/resource-config.component';").Line()
+			importData.Id("import { InputType, InputType_String_GetTypes, InputType_Number_GetTypes, InputType_Map_GetTypes } from '../../ds_base/InputType';").Line()
+			importData.Id("import { DS_Resource } from '../../ds_base/Resource';").Line()
+			importData.Id("import { DynamicUIProps } from '../../ds_base/DynamicUIProps';").Line()
 			for importName := range importSet {
 				importData.Id("import {").Id(importName).Id(",").Id(importName + "_GetTypes").Op("} from").Id("'../types/" + importName + "';").Line()
 			}
@@ -330,54 +418,88 @@ func main() {
 			}
 		}
 
+		// Setup ResourceProperties.ts file
 		importData := Line()
 		importData.Id("import { ResourceType } from './ResourceType';").Line()
-		importData.Id("import { Resource } from 'src/app/Models/CloudResource';").Line()
-		importData.Id("import { DynamicUIProps } from 'src/app/components/resource-config/resource-config.component';").Line()
+		importData.Id("import { DS_Resource, ResourceProperty } from '../ds_base/Resource';").Line()
+		importData.Id("import { DynamicUIProps } from '../ds_base/DynamicUIProps';").Line()
 
-		ResourceFactoryMap := Id("export class ResourceProperties {").Line().Id(" static readonly ResourceFactoryMap = new Map<ResourceType, () => Resource>([").Line()
+		ResourceFactoryMap := Id("export class ResourceProperties {").Line()
+
 		PropertiesMap := Line()
+
+		GetObj := Line()
 
 		keys := make([]string, 0, len(resourceTypeMap))
 		for k := range resourceTypeMap {
 			keys = append(keys, k)
 		}
 
+		// Sort ResourceName
 		slices.SortFunc(keys, func(a, b string) int {
 			return cmp.Compare(strings.ToLower(a), strings.ToLower(b))
 		})
 
+		count := 0
 		for _, res_family := range keys {
-			for _, resourceName := range resourceTypeMap[res_family] {
+			for _, resourceDetail := range resourceTypeMap[res_family] {
+				// TS has some issue when we have more than 1001 elements in map when statically set
+				if count%1001 == 0 {
+					mapCount := strconv.Itoa(count/1001 + 1)
+
+					if count/1001 != 0 {
+						ResourceFactoryMap.Id("]);").Line()
+						PropertiesMap.Id("]);").Line()
+						GetObj.Id(`
+						if (map == undefined) {
+							map = this.ResourceFactoryMap2.get(resType)
+						}`).Line()
+					} else {
+						GetObj.Id("let map = this.ResourceFactoryMap1.get(resType)")
+					}
+
+					ResourceFactoryMap.Id(" static readonly ResourceFactoryMap" + mapCount + " = new Map<ResourceType, () => DS_Resource>([").Line()
+					PropertiesMap.Id("public static propertiesMap" + mapCount + ": Map<ResourceType, ResourceProperty> = new Map([").Line()
+				}
+
+				count += 1
+
 				//fmt.Println(resourceName)
 				res_family_upper := strings.ToUpper(res_family)
-				resourceEnum := res_family_upper + "_" + strings.ToUpper(resourceName)
-				resourceTypeEnum.Id(resourceEnum).Op(",").Line()
-				ResourceFactoryMap.Id("[ResourceType." + resourceEnum + ", () => new " + res_family_upper + "_" + resourceName + "()],").Line()
-				PropertiesMap.Id("[ResourceType." + resourceEnum + "," + res_family_upper + "_" + resourceName + ".GetTypes()],").Line()
-				importData.Id("import { " + resourceName + " as " + res_family_upper + "_" + resourceName + " } from './" + res_family + "/" + resourceName + "';").Line()
-			}
+				resourceEnum := res_family_upper + "_" + strings.ToUpper(resourceDetail.res_name)
+				resourceTypeEnum.Id(resourceEnum)
+				if count == 1 && ProviderFamily == "AWS" {
+					resourceTypeEnum.Id(" = 5000")
+				}
+				resourceTypeEnum.Op(",").Line()
 
+				ResourceFactoryMap.Id("[ResourceType." + resourceEnum + ", () => new " + res_family_upper + "_" + resourceDetail.res_name + "()],").Line()
+				PropertiesMap.Id("[ResourceType." + resourceEnum + ", new ResourceProperty(\"" + resourceDetail.desc + "\"," + res_family_upper + "_" + resourceDetail.res_name + ".GetTypes())],").Line()
+				importData.Id("import { " + resourceDetail.res_name + " as " + res_family_upper + "_" + resourceDetail.res_name + " } from './" + res_family + "/" + resourceDetail.res_name + "';").Line()
+			}
 		}
 
 		ResourceFactoryMap.Id("]);").Line()
+		ResourceFactoryMap.Id(`
+		  public static GetResourceObject(resType: ResourceType): DS_Resource {`)
+		ResourceFactoryMap.Add(GetObj)
+		ResourceFactoryMap.Id(`
+    		return (map as () => DS_Resource)();
+  		}`).Line()
 
-		ResourceFactoryMap.Id("public static GetResourceObject(resType: ResourceType): Resource {	return (this.ResourceFactoryMap.get(resType) as () => Resource)();  }").Line()
-
-		ResourceFactoryMap.Id(" public static propertiesMap: Map<ResourceType, DynamicUIProps[]> = new Map([").Line()
 		ResourceFactoryMap.Add(PropertiesMap).Line().Id("]);}")
 
 		resourceFactoryMapContent := CleanTSCode(fmt.Sprintf("%#v", importData.Line().Add(ResourceFactoryMap)))
-		resourceTypeEnumContent := CleanTSCode(fmt.Sprintf("%#v", Id("export").Id("enum").Id("ResourceType").Block(resourceTypeEnum)))
-
 		if err = os.WriteFile(providerDir+"/ResourceProperties.ts", []byte(resourceFactoryMapContent), 0644); err != nil {
 			panic(err)
 		}
 
+		resourceTypeEnumContent := CleanTSCode(fmt.Sprintf("%#v", Id("export").Id("enum").Id("ResourceType").Block(resourceTypeEnum)))
 		if err = os.WriteFile(providerDir+"/ResourceType.ts", []byte(resourceTypeEnumContent), 0644); err != nil {
 			panic(err)
 		}
 
+		// Setup types/*.ts files
 		for resourceURI, resourceData := range packageSpec.Types {
 			importSet := map[string]struct{}{}
 
@@ -453,21 +575,22 @@ func main() {
 				//fmt.Printf("Required Complex Types: %#v\n", typeMap)
 
 				g.Op("}").Line()
+
 				g.Id("export").Id("function").Id(resourceName + "_GetTypes()").Op(":").Id("DynamicUIProps[]").Id("{").Line().Id("return [")
 
 				for k, v := range typeMap {
 					if v.typeName == "InputType.Object" || v.typeName == "InputType.Array" || v.typeName == "InputType.Map" {
-						g.Id("new DynamicUIProps(" + v.typeName + ",'" + k + "'," + strconv.Quote(v.desc) + "," + v.subType + "," + strconv.FormatBool(v.isRequired) + "," + strconv.FormatBool(v.willReplaceOnChanges) + "),")
+						g.Id("new DynamicUIProps(" + v.typeName + ",'" + k + "'," + strconv.Quote(v.desc) + "," + "() => " + v.subType + "," + strconv.FormatBool(v.isRequired) + "," + strconv.FormatBool(v.willReplaceOnChanges) + "),")
 					} else {
-						g.Id("new DynamicUIProps(" + v.typeName + ",'" + k + "'," + strconv.Quote(v.desc) + "," + "[]" + "," + strconv.FormatBool(v.isRequired) + "," + strconv.FormatBool(v.willReplaceOnChanges) + "),")
+						g.Id("new DynamicUIProps(" + v.typeName + ",'" + k + "'," + strconv.Quote(v.desc) + "," + "() => []" + "," + strconv.FormatBool(v.isRequired) + "," + strconv.FormatBool(v.willReplaceOnChanges) + "),")
 					}
 				}
 				g.Line().Id("];")
 			})
 
 			importData := Line()
-			importData.Id("import { InputType, InputType_String_GetTypes, InputType_Number_GetTypes, InputType_Map_GetTypes } from 'src/app/enum/InputType';").Line()
-			importData.Id("import { DynamicUIProps } from 'src/app/components/resource-config/resource-config.component';").Line()
+			importData.Id("import { InputType, InputType_String_GetTypes, InputType_Number_GetTypes, InputType_Map_GetTypes } from '../../ds_base/InputType';").Line()
+			importData.Id("import { DynamicUIProps } from '../../ds_base/DynamicUIProps';").Line()
 			for importName := range importSet {
 				importData.Id("import {").Id(importName).Id(",").Id(importName + "_GetTypes").Op("} from").Id("'./" + importName + "';").Line()
 			}
@@ -501,7 +624,7 @@ func FormatCode() {
 		panic(err)
 	}
 
-	codePath := rootDir + "/CodegenDir/"
+	codePath := rootDir + "/CodegenDir/ts"
 	fmt.Println("Formatting dir: ", codePath)
 
 	prettierCmd := exec.Command("npx", "prettier", codePath, "--write")
@@ -523,7 +646,12 @@ func GetResourceType(typeSpec *schema.TypeSpec, statement *Statement, importSet 
 	//fmt.Println("[Debug]: Resource Type -> %#v", string(by))
 
 	if len(typeSpec.OneOf) > 0 {
-		typeSpec = &typeSpec.OneOf[0]
+		typeSpec_temp := &typeSpec.OneOf[0]
+		if typeSpec_temp.Type != "string" && len(typeSpec.OneOf) > 1 {
+			typeSpec_temp = &typeSpec.OneOf[1]
+		}
+
+		typeSpec = typeSpec_temp
 	}
 
 	if typeSpec.Type == "object" && typeSpec.Ref != "" {
@@ -603,7 +731,7 @@ func GetResourceType(typeSpec *schema.TypeSpec, statement *Statement, importSet 
 
 			importSet[typeName] = struct{}{}
 
-			if TargetLanguage == "Go" {
+			if TargetLanguage == "Go" && SchemaType != "Types" {
 				typeName = "types." + typeName
 			}
 		} else {
