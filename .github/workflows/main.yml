@@ -26,7 +26,7 @@ jobs:
       - name: Check if the AWS schema file was changed
         run: |
           cd $PATH_SOURCE_CHECKOUT
-          if [[ $(git log --since='10 day ago' ${{ env.TARGET_FILE }} | wc -w) -gt 0 ]]; then
+          if [[ $(git log --since='1 day ago' ${{ env.TARGET_FILE }} | wc -w) -gt 0 ]]; then
             echo 'We have changes' 
             echo "MergeChanges=true" >> $GITHUB_ENV
           else
