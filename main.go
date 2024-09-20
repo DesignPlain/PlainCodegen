@@ -95,6 +95,7 @@ func main() {
 			resourceParts := strings.Split(resourceURI, ":")
 			resourceName := resourceParts[2]
 			resourceFamily := strings.Split(resourceParts[1], "/")[0]
+			resourceFamily = strings.Replace(resourceFamily, ".", "__", -1)
 
 			_, err = os.Stat(providerDir + resourceFamily)
 			if err != nil {
@@ -200,6 +201,7 @@ func main() {
 
 			resourceParts := strings.Split(resourceURI, ":")
 			resourceFamily := strings.Split(resourceParts[1], "/")[0]
+			resourceFamily = strings.Replace(resourceFamily, ".", "__", -1)
 			resourceName := resourceFamily + "_" + resourceParts[2]
 
 			charArray := []rune(resourceName)
@@ -274,7 +276,16 @@ func main() {
 			if resourceName == "Map" {
 				resourceName = "MapResource"
 			}
-			resourceFamily := strings.Split(resourceParts[1], "/")[0]
+
+			resourceSubParts := strings.Split(resourceParts[1], "/")
+			resourceFamily := resourceSubParts[0]
+
+			if providerName == "kubernetes" && len(resourceSubParts) >= 2 {
+				api_version := resourceSubParts[1]
+				resourceName += "__" + api_version
+			}
+
+			resourceFamily = strings.Replace(resourceFamily, ".", "__", -1)
 
 			_, err = os.Stat(providerDir + resourceFamily)
 			if err != nil {
@@ -286,10 +297,11 @@ func main() {
 			before, _, present := strings.Cut(resourceData.Description, "## Example Usage")
 			if !present {
 				before, _, _ = strings.Cut(resourceData.Description, "\n")
-			} else {
-				before = strings.Replace(before, "\n", " ", -1)
-				before = strings.Replace(before, "\"", "\\\"", -1)
 			}
+
+			before = strings.Replace(before, "\n", " ", -1)
+			before = strings.Replace(before, "\r", " ", -1)
+			before = strings.Replace(before, "\"", "\\\"", -1)
 
 			res_desc := strings.Replace(before, "*", "-", -1)
 			res_desc = strings.TrimRight(res_desc, "\n ")
@@ -506,8 +518,17 @@ func main() {
 			typeMap := map[string]UIType{}
 
 			resourceParts := strings.Split(resourceURI, ":")
-			resourceFamily := strings.Split(resourceParts[1], "/")[0]
-			resourceName := resourceFamily + "_" + resourceParts[2]
+			resourceName := resourceParts[2]
+			resourceSubParts := strings.Split(resourceParts[1], "/")
+			resourceFamily := resourceSubParts[0]
+			resourceFamily = strings.Replace(resourceFamily, ".", "__", -1)
+
+			if providerName == "kubernetes" && len(resourceSubParts) > 2 {
+				api_version := resourceSubParts[1]
+				resourceName += "__" + api_version
+			} else {
+				resourceName = resourceFamily + "_" + resourceName
+			}
 
 			_, err = os.Stat(providerDir + resourceFamily)
 			if err != nil {
@@ -721,6 +742,7 @@ func GetResourceType(typeSpec *schema.TypeSpec, statement *Statement, importSet 
 		if !strings.Contains(typeSpec.Ref, "pulumi.json") {
 			resourceParts := strings.Split(typeSpec.Ref, ":")
 			resourceFamily := strings.Split(resourceParts[1], "/")[0]
+			resourceFamily = strings.Replace(resourceFamily, ".", "__", -1)
 			typeName = resourceFamily + "_" + resourceParts[2]
 
 			if TargetLanguage == "Go" {
